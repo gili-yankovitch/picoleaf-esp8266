@@ -11,5 +11,5 @@
 # include /usr/share/arduino/Arduino.mk
 
 # ESP8266 flash
-UPLOAD_PORT = /dev/ttyUSB1
+UPLOAD_PORT = /dev/ttyUSB0
 include /usr/share/arduino/hardware/espressif/makeEspArduino.mk

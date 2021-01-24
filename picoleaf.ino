@@ -12,8 +12,6 @@
 
 #define MAX_LEDS    60
 
-#define HTTP_ENDPOINT "http://192.168.1.211/get"
-
 struct led_s
 {
 	uint8_t red;
@@ -135,11 +133,10 @@ void resetBLUEs()
 	}
 }
 
-#define CONFIG_FILE "/config"
-
 #define MAX_AP_LIST_SIZE 32
 #define FORM_SSID_NAME "ssid"
 #define FORM_PW_NAME "password"
+#define FORM_URL_NAME "url"
 
 enum
 {
@@ -151,7 +148,7 @@ String accesspoints[MAX_AP_LIST_SIZE];
 unsigned int num_accesspoints;
 
 /* Set these to your desired credentials. */
-const char *ssid = "Nanoleaf";
+const char *ssid = "Picoleaf";
 const char *password = "12345678";
 
 ESP8266WebServer server(80);
@@ -170,10 +167,14 @@ ESP8266WebServer server(80);
 #define CONFIG_EXISTS_SIZE 1
 #define CONFIG_SSID_SIZE   (32 + 1)
 #define CONFIG_PW_SIZE     (64 + 1)
+#define CONFIG_URL_SIZE    (128 + 1)
 
 #define CONFIG_EXISTS_ADDR 0
 #define CONFIG_SSID_ADDR   (CONFIG_EXISTS_ADDR + CONFIG_EXISTS_SIZE)
 #define CONFIG_PW_ADDR     (CONFIG_SSID_ADDR   + CONFIG_SSID_SIZE)
+#define CONFIG_URL_ADDR    (CONFIG_PW_ADDR     + CONFIG_PW_SIZE)
+
+static String updateURL;
 
 bool isConfigured()
 {
@@ -221,13 +222,21 @@ static void EEPROMWritePW(String pw)
 	EEPROMWriteString(CONFIG_PW_ADDR, pw.substring(0, CONFIG_PW_SIZE));
 }
 
-void WriteConfig(String ssid, String pw)
+static void EEPROMWriteURL(String url)
+{
+	EEPROMWriteString(CONFIG_URL_ADDR, url.substring(0, CONFIG_URL_SIZE));
+}
+
+void WriteConfig(String ssid, String pw, String url)
 {
 	/* Write SSID */
 	EEPROMWriteSSID(ssid);
 
 	/* Write Password */
 	EEPROMWritePW(pw);
+
+	/* Write URL */
+	EEPROMWriteURL(url);
 
 	/* Configured */
 	EEPROMWriteConfig();
@@ -239,13 +248,14 @@ void ReadConfig(String * ssid, String * pw)
 {
 	EEPROMReadString(CONFIG_SSID_ADDR, ssid);
 	EEPROMReadString(CONFIG_PW_ADDR, pw);
+	EEPROMReadString(CONFIG_URL_ADDR, &updateURL);
 }
 
 String head = "<!DOCTYPE html><html><head> <title>EscapePort</title> <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>";
 String css = "<style>body{font-family: Lato, sans-serif; font-size: 14px; text-align: center;}h1{font-size: 3em;}body>div{width: 50%; margin: 0 auto; position: absolute; top: 50%; left: 50%; transform: translateY(-50%) translateX(-50%);}.label{display: inline-block; width: 100px; margin-bottom: 10px; margin-top: 10px;}.label.no-margin{margin: 0;}small{display: inline-block; margin-bottom: 10px;}select, input{width: 200px; height: 25px; border: 1px solid #008CBA; background-color: white; padding: 3px; box-sizing: border-box;}button{width: 200px; background-color: #008CBA; border: none; border-radius: 5px; color: white; padding: 15px 32px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin-top: 5px;}@media only screen and (min-device-width: 320px) and (max-device-width: 480px){h2{font-size: 16px;}body>div{width: 90%;}}</style>";
 
 String body_upper = "</head> <body> <div> <form method=\"post\"> <h1>NanoLeaf</h1> <h2>Please select your network SSID from the list and enter its password below</h2> <br/> <div class=\"label\">Network</div><select name=\"ssid\">";
-String body_lower = "</select> <br/> <div class=\"label\">Password</div><input type=\"password\" name=\"password\"/> <br/> <div class=\"label\"></div><button type=\"submit\">Connect</button> </form> </div></body></html>";
+String body_lower = "</select> <br/> <div class=\"label\">Password</div><input type=\"password\" name=\"password\"/> <br/> <div class=\"label\">Update URL</div><input name=\"url\"/> <br/> <div class=\"label\"></div><button type=\"submit\">Connect</button> </form> </div></body></html>";
 
 String body_upper_landing = "</head> <body> <div> <h1>Connecting to: ";
 String body_lower_landing = "</h1> <h2>Please check your device, and make sure the led is on</h2> </div></body></html>";
@@ -258,7 +268,7 @@ void actAsClient();
 */
 void handleRoot()
 {
-	if ((!server.hasArg(FORM_SSID_NAME)) || (!server.hasArg(FORM_PW_NAME)))
+	if ((!server.hasArg(FORM_SSID_NAME)) || (!server.hasArg(FORM_PW_NAME)) || (!server.hasArg(FORM_URL_NAME)))
 	{
 		String page = head + css + body_upper;
 		for (int i = 0; i < num_accesspoints; ++i)
@@ -274,16 +284,19 @@ void handleRoot()
 	{
 		String ssid = server.arg(FORM_SSID_NAME);
 		String pw = server.arg(FORM_PW_NAME);
+		String url = server.arg(FORM_URL_NAME);
 
 		Serial.print("Connecting to: ");
 		Serial.println(ssid);
 		Serial.print("Password: ");
 		Serial.println(pw);
+		Serial.print("URL: ");
+		Serial.println(url);
 
 		String page = head + css + body_upper_landing + ssid + body_lower_landing;
 		server.send(200, "text/html", page);
 
-		WriteConfig(ssid, pw);
+		WriteConfig(ssid, pw, url);
 
 		/* Try connecting... */
 		actAsClient();
@@ -334,6 +347,8 @@ void actAsClient()
 	Serial.println(ssid);
 	Serial.print("Read Password from EEPROM: ");
 	Serial.println(pw);
+	Serial.print("Read URL from EEPROM: ");
+	Serial.println(updateURL);
 
 	resetBLUEs();
 
@@ -413,10 +428,10 @@ void setup()
 #define OPCODE_LED           3
 
 #define MIN(x, y) (((x) > (y) ? (y) : (x)))
-#define BUFFER_SIZE          (1024 * 4)
+#define BUFFER_SIZE          (1024 * 8)
 uint8_t ledsData[BUFFER_SIZE];
 size_t ledsLen = 0;
-static unsigned version = 0xffffffff;
+static int version = -1;
 
 void animate()
 {
@@ -486,7 +501,7 @@ void updateData()
 {
 	int res;
 	HTTPClient http;
-	http.begin(HTTP_ENDPOINT);
+	http.begin(updateURL);
 
 	if ((res = http.GET()) == 200)
 	{
@@ -511,7 +526,7 @@ void updateData()
 		protoVersion = data[PROTO_VER_OFF];
 
 		// Should update?
-		if ((isValid == VALID_CODE) && (protoVersion != version))
+		if ((isValid == VALID_CODE) && ((protoVersion > version) || ((version > (0xff / 2)) && (protoVersion < 0xff / 2))) )
 		{
 			ledsLen = MIN(payload.length() - 2, BUFFER_SIZE);
 
@@ -519,27 +534,6 @@ void updateData()
 
 			version = protoVersion;
 		}
-#if 0
-			xmitStart();
-
-			Serial.printf("========================\r\n");
-
-			for (i = PROTO_VER_OFF + 1; i < len; i += PROTO_LEDS_LEN)
-			{
-				uint8_t red    = data[i + PROTO_REL_RED_OFF];
-				uint8_t green  = data[i + PROTO_REL_GREEN_OFF];
-				uint8_t blue   = data[i + PROTO_REL_BLUE_OFF];
-				uint8_t bright = data[i + PROTO_REL_BRIGHT_OFF];
-
-				Serial.printf("Red: %x Green: %x Blue: %x Brightness: %x\r\n", red, green, blue, bright);
-
-				xmitColor(red, green, blue, bright);
-			}
-
-			xmitStop((len - 2) / 4);
-
-			version = protoVersion;
-#endif
 	}
 
 	http.end();
