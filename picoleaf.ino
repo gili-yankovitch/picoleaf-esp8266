@@ -401,8 +401,6 @@ void setup()
 	Serial.println("Initializing EEPROM Util");
 	EEPROM.begin(512);
 
-	resetConfig();
-
 	if (!isConfigured())
 	{
 		actAsAP();
