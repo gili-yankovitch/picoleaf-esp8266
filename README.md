@@ -21,7 +21,7 @@ On first use, the board will expose a new WiFi network called `Picoleaf`. Its IP
 This setup page asks you to choose your own WiFi SSID and supply its password. The last configuration field is the management URL the board should contact to get its animation and configuration. This will usually look something like: `http://<YOUR-HOSTNAME>/get`. Setting up this management interface is done by deploying this sister-repo: https://github.com/gili-yankovitch/PicoLeaf
 
 ## Electronics
-* AP102 - This uses `APA102` Addressable LEDs and a driver is implemented here to use them. Though labeled for 5v usage, it is possible to operate them using the 3.3v input voltage the ESP8266 receives as well as 3.3v TTL logic GPIOs.
+* APA102 - This uses `APA102` Addressable LEDs and a driver is implemented here to use them. Though labeled for 5v usage, it is possible to operate them using the 3.3v input voltage the ESP8266 receives as well as 3.3v TTL logic GPIOs.
 * BOB-12009 - For 5v step-up, there's a really good one labeled `BOB-12009` that can be of use, though not really needed.
 * AS2850 - Powering this directly from USB supplying 5v input voltage, the `AS2850` is used as voltage regulator for the ESP8266 operating at 3.3v
 
