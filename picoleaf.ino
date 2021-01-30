@@ -254,7 +254,7 @@ void ReadConfig(String * ssid, String * pw)
 String head = "<!DOCTYPE html><html><head> <title>PicoLeaf</title> <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>";
 String css = "<style>body{font-family: Lato, sans-serif; font-size: 14px; text-align: center;}h1{font-size: 3em;}body>div{width: 50%; margin: 0 auto; position: absolute; top: 50%; left: 50%; transform: translateY(-50%) translateX(-50%);}.label{display: inline-block; width: 100px; margin-bottom: 10px; margin-top: 10px;}.label.no-margin{margin: 0;}small{display: inline-block; margin-bottom: 10px;}select, input{width: 200px; height: 25px; border: 1px solid #008CBA; background-color: white; padding: 3px; box-sizing: border-box;}button{width: 200px; background-color: #008CBA; border: none; border-radius: 5px; color: white; padding: 15px 32px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin-top: 5px;}@media only screen and (min-device-width: 320px) and (max-device-width: 480px){h2{font-size: 16px;}body>div{width: 90%;}}</style>";
 
-String body_upper = "</head> <body> <div> <form method=\"post\"> <h1>NanoLeaf</h1> <h2>Please select your network SSID from the list and enter its password below</h2> <br/> <div class=\"label\">Network</div><select name=\"ssid\">";
+String body_upper = "</head> <body> <div> <form method=\"post\"> <h1>Picoleaf</h1> <h2>Please select your network SSID from the list and enter its password below</h2> <br/> <div class=\"label\">Network</div><select name=\"ssid\">";
 String body_lower = "</select> <br/> <div class=\"label\">Password</div><input type=\"password\" name=\"password\"/> <br/> <div class=\"label\">Update URL</div><input name=\"url\"/> <br/> <div class=\"label\"></div><button type=\"submit\">Connect</button> </form> </div></body></html>";
 
 String body_upper_landing = "</head> <body> <div> <h1>Connecting to: ";
@@ -400,6 +400,8 @@ void setup()
 	/* Start File System */
 	Serial.println("Initializing EEPROM Util");
 	EEPROM.begin(512);
+
+	resetConfig();
 
 	if (!isConfigured())
 	{
