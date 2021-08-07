@@ -4,6 +4,9 @@
 #include <ESP8266HTTPClient.h>
 #include <EEPROM.h>
 
+#define DEBUG_ESP_PORT Serial
+#include <SocketIOclient.h>
+
 #define BITS_IN_BYTE 8
 #define FRAME_SIZE   4
 
@@ -11,6 +14,16 @@
 #define DATA_PIN     2
 
 #define MAX_LEDS    60
+
+#ifndef MIN
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+#endif
+
+// Forward declaration
+void updateData();
+
+// Websocket object
+SocketIOclient socketIO;
 
 struct led_s
 {
@@ -214,17 +227,17 @@ static void EEPROMWriteConfig()
 
 static void EEPROMWriteSSID(String ssid)
 {
-	EEPROMWriteString(CONFIG_SSID_ADDR, ssid.substring(0, CONFIG_SSID_SIZE));
+	EEPROMWriteString(CONFIG_SSID_ADDR, ssid.substring(0, MIN(ssid.length(), CONFIG_SSID_SIZE)));
 }
 
 static void EEPROMWritePW(String pw)
 {
-	EEPROMWriteString(CONFIG_PW_ADDR, pw.substring(0, CONFIG_PW_SIZE));
+	EEPROMWriteString(CONFIG_PW_ADDR, pw.substring(0, MIN(pw.length(), CONFIG_PW_SIZE)));
 }
 
 static void EEPROMWriteURL(String url)
 {
-	EEPROMWriteString(CONFIG_URL_ADDR, url.substring(0, CONFIG_URL_SIZE));
+	EEPROMWriteString(CONFIG_URL_ADDR, url.substring(0, MIN(url.length(), CONFIG_URL_SIZE)));
 }
 
 void WriteConfig(String ssid, String pw, String url)
@@ -334,6 +347,63 @@ void actAsAP()
 
 #define WIFI_CONNECT_TIMEOUT 10
 
+void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length)
+{
+	switch(type)
+	{
+		case sIOtype_DISCONNECT:
+		{
+			Serial.printf("[IOc] Disconnected!\r\n");
+			break;
+		}
+		case sIOtype_CONNECT:
+		{
+			Serial.printf("[IOc] Connected to url: %s\r\n", payload);
+
+			// join default namespace (no auto join in Socket.IO V3)
+			socketIO.send(sIOtype_CONNECT, "/");
+
+			updateData();
+
+			break;
+		}
+
+		case sIOtype_EVENT:
+		{
+			Serial.printf("[IOc] get event: %s\r\n", payload);
+
+			updateData();
+
+			break;
+		}
+	}
+}
+
+void initiateWebsocket()
+{
+	int startIdx = 0;
+	int connectPort = 0;
+
+	if ((startIdx = updateURL.indexOf("http://")) >= 0)
+	{
+		startIdx += strlen("http://");
+		connectPort = 80;
+	}
+	else
+	{
+		startIdx = updateURL.indexOf("https://") + strlen("https://");
+		connectPort = 443;
+	}
+
+	String domain = updateURL.substring(startIdx, updateURL.indexOf('/', startIdx));
+
+	Serial.printf("Domain to connect to: %s:%d\r\n", domain.c_str(), connectPort);
+
+	socketIO.begin(domain.c_str(), connectPort, "/socket.io/?EIO=4");
+
+	socketIO.onEvent(socketIOEvent);
+}
+
 void actAsClient()
 {
 	String ssid;
@@ -374,6 +444,8 @@ void actAsClient()
 	{
 		Serial.println("Connected.");
 		resetGREENs();
+
+		initiateWebsocket();
 	}
 }
 
@@ -393,7 +465,7 @@ void setup()
 
 	resetLEDs();
 
-	Serial.begin(9600);
+	Serial.begin(115200);
 	delay(1000);
 	Serial.println();
 
@@ -538,7 +610,7 @@ void updateData()
 
 	http.end();
 
-	animate();
+	// animate();
 
 done:
 	// delay(1000);
@@ -561,6 +633,8 @@ void loop()
 	}
 	else
 	{
-		updateData();
+		socketIO.loop();
+
+		animate();
 	}
 }

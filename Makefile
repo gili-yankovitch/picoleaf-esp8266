@@ -12,4 +12,6 @@
 
 # ESP8266 flash
 UPLOAD_PORT = /dev/ttyUSB0
+LIBS = /usr/share/arduino/libraries/arduinoWebSockets/
+#BUILD_EXTRA_FLAGS = -DDEBUG_ESP_PORT=Serial
 include /usr/share/arduino/hardware/espressif/makeEspArduino.mk
