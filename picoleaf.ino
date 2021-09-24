@@ -3,9 +3,13 @@
 #include <ESP8266WebServer.h>
 #include <ESP8266HTTPClient.h>
 #include <EEPROM.h>
+#include <ArduinoJson.h>
 
 #define DEBUG_ESP_PORT Serial
-#include <SocketIOclient.h>
+#define ANIMATION_TRANSLATOR_URL "http://animation-translator.herokuapp.com/get"
+#define ENDPOINTS_SERVICE_UPDATE_URL "http://central-endpoints.herokuapp.com/update"
+#define ENDPOINTS_SERVICE_GET_URL "http://central-endpoints.herokuapp.com/get"
+#define DEVICE_TYPE "LEDS"
 
 #define BITS_IN_BYTE 8
 #define FRAME_SIZE   4
@@ -21,9 +25,7 @@
 
 // Forward declaration
 void updateData();
-
-// Websocket object
-SocketIOclient socketIO;
+WiFiClient client;
 
 struct led_s
 {
@@ -34,7 +36,6 @@ struct led_s
 };
 
 #define VALID_CODE 0x42
-static struct led_s leds[MAX_LEDS];
 
 enum bit_e
 {
@@ -79,10 +80,10 @@ void xmitStart()
 
 void xmitStop(int count)
 {
-	unsigned i = 0;
+	int i = 0;
 
 	// for (i = 0; i < FRAME_SIZE; ++i)
-	for (i = 0; i < (count + 14) / 16; ++i)
+	for (i = 0; i < ((count + 14) / 16); ++i)
 		xmitByte(0);
 }
 
@@ -149,7 +150,7 @@ void resetBLUEs()
 #define MAX_AP_LIST_SIZE 32
 #define FORM_SSID_NAME "ssid"
 #define FORM_PW_NAME "password"
-#define FORM_URL_NAME "url"
+#define FORM_ENV_ID_NAME "env_id"
 
 enum
 {
@@ -164,6 +165,7 @@ unsigned int num_accesspoints;
 const char *ssid = "Picoleaf";
 const char *password = "12345678";
 
+/* Create a server to receive commands */
 ESP8266WebServer server(80);
 
 /* EEPROM Map:
@@ -180,14 +182,17 @@ ESP8266WebServer server(80);
 #define CONFIG_EXISTS_SIZE 1
 #define CONFIG_SSID_SIZE   (32 + 1)
 #define CONFIG_PW_SIZE     (64 + 1)
-#define CONFIG_URL_SIZE    (128 + 1)
+#define CONFIG_ENV_ID_SIZE    (16 + 1)
+#define CONFIG_NAME_SIZE (8 + 1)
 
 #define CONFIG_EXISTS_ADDR 0
 #define CONFIG_SSID_ADDR   (CONFIG_EXISTS_ADDR + CONFIG_EXISTS_SIZE)
 #define CONFIG_PW_ADDR     (CONFIG_SSID_ADDR   + CONFIG_SSID_SIZE)
-#define CONFIG_URL_ADDR    (CONFIG_PW_ADDR     + CONFIG_PW_SIZE)
+#define CONFIG_ENV_ID_ADDR (CONFIG_PW_ADDR     + CONFIG_PW_SIZE)
+#define CONFIG_NAME_ADDR   (CONFIG_ENV_ID_ADDR + CONFIG_ENV_ID_SIZE)
 
-static String updateURL;
+static String envId;
+static String devName;
 
 bool isConfigured()
 {
@@ -202,7 +207,7 @@ void resetConfig()
 
 void EEPROMWriteString(int addr, String str)
 {
-	for (int i = 0; i < str.length(); ++i)
+	for (unsigned int i = 0; i < str.length(); ++i)
 	{
 		EEPROM.write(addr + i, str.c_str()[i]);
 	}
@@ -235,12 +240,31 @@ static void EEPROMWritePW(String pw)
 	EEPROMWriteString(CONFIG_PW_ADDR, pw.substring(0, MIN(pw.length(), CONFIG_PW_SIZE)));
 }
 
-static void EEPROMWriteURL(String url)
+static void EEPROMWriteID(String env_id)
 {
-	EEPROMWriteString(CONFIG_URL_ADDR, url.substring(0, MIN(url.length(), CONFIG_URL_SIZE)));
+	EEPROMWriteString(CONFIG_ENV_ID_ADDR, env_id.substring(0, MIN(env_id.length(), CONFIG_ENV_ID_SIZE)));
 }
 
-void WriteConfig(String ssid, String pw, String url)
+static void EEPROMWriteName(String name)
+{
+	EEPROMWriteString(CONFIG_NAME_ADDR, name.substring(0, MIN(name.length(), CONFIG_NAME_SIZE)));
+}
+
+String GenerateRandomName()
+{
+	char letters[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+	String name;
+	unsigned i;
+
+	for (i = 0; i < CONFIG_NAME_SIZE - 1; ++i)
+	{
+		name += letters[random(sizeof(letters))];
+	}
+
+	return name;
+}
+
+void WriteConfig(String ssid, String pw, String env_id, String name)
 {
 	/* Write SSID */
 	EEPROMWriteSSID(ssid);
@@ -249,7 +273,9 @@ void WriteConfig(String ssid, String pw, String url)
 	EEPROMWritePW(pw);
 
 	/* Write URL */
-	EEPROMWriteURL(url);
+	EEPROMWriteID(env_id);
+
+	EEPROMWriteName(name);
 
 	/* Configured */
 	EEPROMWriteConfig();
@@ -261,14 +287,15 @@ void ReadConfig(String * ssid, String * pw)
 {
 	EEPROMReadString(CONFIG_SSID_ADDR, ssid);
 	EEPROMReadString(CONFIG_PW_ADDR, pw);
-	EEPROMReadString(CONFIG_URL_ADDR, &updateURL);
+	EEPROMReadString(CONFIG_ENV_ID_ADDR, &envId);
+	EEPROMReadString(CONFIG_NAME_ADDR, &devName);
 }
 
 String head = "<!DOCTYPE html><html><head> <title>PicoLeaf</title> <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"/>";
 String css = "<style>body{font-family: Lato, sans-serif; font-size: 14px; text-align: center;}h1{font-size: 3em;}body>div{width: 50%; margin: 0 auto; position: absolute; top: 50%; left: 50%; transform: translateY(-50%) translateX(-50%);}.label{display: inline-block; width: 100px; margin-bottom: 10px; margin-top: 10px;}.label.no-margin{margin: 0;}small{display: inline-block; margin-bottom: 10px;}select, input{width: 200px; height: 25px; border: 1px solid #008CBA; background-color: white; padding: 3px; box-sizing: border-box;}button{width: 200px; background-color: #008CBA; border: none; border-radius: 5px; color: white; padding: 15px 32px; text-align: center; text-decoration: none; display: inline-block; font-size: 16px; margin-top: 5px;}@media only screen and (min-device-width: 320px) and (max-device-width: 480px){h2{font-size: 16px;}body>div{width: 90%;}}</style>";
 
 String body_upper = "</head> <body> <div> <form method=\"post\"> <h1>Picoleaf</h1> <h2>Please select your network SSID from the list and enter its password below</h2> <br/> <div class=\"label\">Network</div><select name=\"ssid\">";
-String body_lower = "</select> <br/> <div class=\"label\">Password</div><input type=\"password\" name=\"password\"/> <br/> <div class=\"label\">Update URL</div><input name=\"url\"/> <br/> <div class=\"label\"></div><button type=\"submit\">Connect</button> </form> </div></body></html>";
+String body_lower = "</select> <br/> <div class=\"label\">Password</div><input type=\"password\" name=\"password\"/> <br/> <div class=\"label\">Env ID</div><input name=\"env_id\"/> <br/> <div class=\"label\"></div><button type=\"submit\">Connect</button> </form> </div></body></html>";
 
 String body_upper_landing = "</head> <body> <div> <h1>Connecting to: ";
 String body_lower_landing = "</h1> <h2>Please check your device, and make sure the led is on</h2> </div></body></html>";
@@ -281,10 +308,10 @@ void actAsClient();
 */
 void handleRoot()
 {
-	if ((!server.hasArg(FORM_SSID_NAME)) || (!server.hasArg(FORM_PW_NAME)) || (!server.hasArg(FORM_URL_NAME)))
+	if ((!server.hasArg(FORM_SSID_NAME)) || (!server.hasArg(FORM_PW_NAME)) || (!server.hasArg(FORM_ENV_ID_NAME)))
 	{
 		String page = head + css + body_upper;
-		for (int i = 0; i < num_accesspoints; ++i)
+		for (unsigned i = 0; i < num_accesspoints; ++i)
 		{
 			page += "<option>" + accesspoints[i] + "</option>";
 		}
@@ -297,19 +324,19 @@ void handleRoot()
 	{
 		String ssid = server.arg(FORM_SSID_NAME);
 		String pw = server.arg(FORM_PW_NAME);
-		String url = server.arg(FORM_URL_NAME);
+		String env_id = server.arg(FORM_ENV_ID_NAME);
 
 		Serial.print("Connecting to: ");
 		Serial.println(ssid);
 		Serial.print("Password: ");
 		Serial.println(pw);
-		Serial.print("URL: ");
-		Serial.println(url);
+		Serial.print("Env ID: ");
+		Serial.println(env_id);
 
 		String page = head + css + body_upper_landing + ssid + body_lower_landing;
 		server.send(200, "text/html", page);
 
-		WriteConfig(ssid, pw, url);
+		WriteConfig(ssid, pw, env_id, GenerateRandomName());
 
 		/* Try connecting... */
 		actAsClient();
@@ -323,7 +350,7 @@ void actAsAP()
 	Serial.println("Scanning for networks...");
 	int n = WiFi.scanNetworks();
 	num_accesspoints = (n > MAX_AP_LIST_SIZE) ? MAX_AP_LIST_SIZE : n;
-	for (int i = 0; i < num_accesspoints; ++i)
+	for (unsigned int i = 0; i < num_accesspoints; ++i)
 	{
 		accesspoints[i] = WiFi.SSID(i);
 		Serial.println(accesspoints[i]);
@@ -346,62 +373,122 @@ void actAsAP()
 }
 
 #define WIFI_CONNECT_TIMEOUT 10
+#define FORM_SSID_NAME "ssid"
 
-void socketIOEvent(socketIOmessageType_t type, uint8_t * payload, size_t length)
+#define HEADER_SIZE 2
+#define PROTO_VALID_OFF 0
+#define PROTO_VER_OFF   1
+
+#define PROTO_REL_RED_OFF    0
+#define PROTO_REL_GREEN_OFF  1
+#define PROTO_REL_BLUE_OFF   2
+#define PROTO_REL_BRIGHT_OFF 3
+#define PROTO_LEDS_LEN       4
+
+#define OPCODE_FRAME_START   0
+#define OPCODE_FRAME_END     1
+#define OPCODE_SLEEP         2
+#define OPCODE_LED           3
+
+#define BUFFER_SIZE          (1024 * 8)
+uint8_t ledsData[BUFFER_SIZE];
+size_t ledsLen = 0;
+
+// Default with no data
+void reportEndpoint(String data = "");
+
+void reportEndpoint(String data)
 {
-	switch(type)
+	HTTPClient http;
+	StaticJsonDocument<2048> doc;
+	String report;
+
+	doc["id"] = envId;
+	doc["type"] = DEVICE_TYPE;
+	doc["name"] = devName;
+	
+	if (data == "")
 	{
-		case sIOtype_DISCONNECT:
-		{
-			Serial.printf("[IOc] Disconnected!\r\n");
-			break;
-		}
-		case sIOtype_CONNECT:
-		{
-			Serial.printf("[IOc] Connected to url: %s\r\n", payload);
-
-			// join default namespace (no auto join in Socket.IO V3)
-			socketIO.send(sIOtype_CONNECT, "/");
-
-			updateData();
-
-			break;
-		}
-
-		case sIOtype_EVENT:
-		{
-			Serial.printf("[IOc] get event: %s\r\n", payload);
-
-			updateData();
-
-			break;
-		}
-	}
-}
-
-void initiateWebsocket()
-{
-	int startIdx = 0;
-	int connectPort = 0;
-
-	if ((startIdx = updateURL.indexOf("http://")) >= 0)
-	{
-		startIdx += strlen("http://");
-		connectPort = 80;
+		// Update address
+		doc["address"] = WiFi.localIP().toString();
 	}
 	else
 	{
-		startIdx = updateURL.indexOf("https://") + strlen("https://");
-		connectPort = 443;
+		// Update data
+		doc["data"] = data;
 	}
 
-	String domain = updateURL.substring(startIdx, updateURL.indexOf('/', startIdx));
+	serializeJson(doc, report);
 
-	Serial.printf("Domain to connect to: %s:%d\r\n", domain.c_str(), connectPort);
+	http.begin(client, ENDPOINTS_SERVICE_UPDATE_URL);
+	http.addHeader("Content-Type", "application/json");	
 
-	socketIO.begin(domain.c_str(), connectPort, "/socket.io/?EIO=4");
+	http.POST(report);
+	http.end();
+}
 
-	socketIO.onEvent(socketIOEvent);
+void reloadData()
+{
+	int res;
+	HTTPClient http;
+	http.begin(client, ANIMATION_TRANSLATOR_URL "?id=" + envId + "&name=" + devName);
+
+	if ((res = http.GET()) == 200)
+	{
+		uint8_t isValid;
+		uint8_t * data;
+
+		String payload = http.getString();
+
+		if (payload.length() < HEADER_SIZE)
+		{
+			Serial.println("Error in header size");
+
+			return;
+		}
+
+		// Parse the incoming data
+		data = (uint8_t *)payload.c_str();
+
+		isValid = data[PROTO_VALID_OFF];
+
+		// Should update?
+		if (isValid == VALID_CODE)
+		{
+			ledsLen = MIN(payload.length() - 2, BUFFER_SIZE);
+
+			memcpy(ledsData, data + 2, ledsLen);
+		}
+	}
+	else
+	{
+		ledsLen = 0;
+	}
+
+	http.end();
+}
+
+void handleUpdate()
+{
+	reloadData();
+
+	server.sendHeader("Access-Control-Allow-Origin", "*");
+	server.send(200, "application/json", "{\"succcess\": True}");
+}
+
+void handleEverythingElse()
+{
+	if (server.method() == HTTP_OPTIONS)
+	{
+		server.sendHeader("Access-Control-Allow-Origin", "*");
+		server.sendHeader("Access-Control-Allow-Methods", "PUT, POST, GET, DELETE, OPTIONS");
+		server.sendHeader("Access-Control-Allow-Headers", "Origin, X-Requested-With, Content-Type, Accept");
+		server.send(204);
+	}
+	else
+	{
+		server.send(404, "text/plain", "");
+	}
 }
 
 void actAsClient()
@@ -417,8 +504,8 @@ void actAsClient()
 	Serial.println(ssid);
 	Serial.print("Read Password from EEPROM: ");
 	Serial.println(pw);
-	Serial.print("Read URL from EEPROM: ");
-	Serial.println(updateURL);
+	Serial.print("Read Env Id from EEPROM: ");
+	Serial.println(envId);
 
 	resetBLUEs();
 
@@ -445,7 +532,19 @@ void actAsClient()
 		Serial.println("Connected.");
 		resetGREENs();
 
-		initiateWebsocket();
+		configTime(3 * 3600, 0, "pool.ntp.org", "time.nist.gov");
+
+		// Reload data
+		reloadData();
+
+		// Report on wakeup
+		reportEndpoint();
+
+		/* Configure server to handle commands */
+		server.on("/update", HTTP_POST, handleUpdate);
+		server.onNotFound(handleEverythingElse);
+		
+		server.begin();
 	}
 }
 
@@ -465,6 +564,9 @@ void setup()
 
 	resetLEDs();
 
+	// Reset random
+	randomSeed(analogRead(0));
+
 	Serial.begin(115200);
 	delay(1000);
 	Serial.println();
@@ -481,29 +583,7 @@ void setup()
 	{
 		actAsClient();
 	}
-
 }
-
-#define HEADER_SIZE 2
-#define PROTO_VALID_OFF 0
-#define PROTO_VER_OFF   1
-
-#define PROTO_REL_RED_OFF    0
-#define PROTO_REL_GREEN_OFF  1
-#define PROTO_REL_BLUE_OFF   2
-#define PROTO_REL_BRIGHT_OFF 3
-#define PROTO_LEDS_LEN       4
-
-#define OPCODE_FRAME_START   0
-#define OPCODE_FRAME_END     1
-#define OPCODE_SLEEP         2
-#define OPCODE_LED           3
-
-#define MIN(x, y) (((x) > (y) ? (y) : (x)))
-#define BUFFER_SIZE          (1024 * 8)
-uint8_t ledsData[BUFFER_SIZE];
-size_t ledsLen = 0;
-static int version = -1;
 
 void animate()
 {
@@ -569,72 +649,17 @@ void animate()
 	}
 }
 
-void updateData()
-{
-	int res;
-	HTTPClient http;
-	http.begin(updateURL);
-
-	if ((res = http.GET()) == 200)
-	{
-		uint8_t isValid;
-		uint8_t protoVersion;
-		uint8_t * data;
-		size_t len;
-
-		String payload = http.getString();
-
-		if (payload.length() < HEADER_SIZE)
-		{
-			Serial.println("Error in header size");
-
-			goto error;
-		}
-
-		// Parse the incoming data
-		data = (uint8_t *)payload.c_str();
-
-		isValid = data[PROTO_VALID_OFF];
-		protoVersion = data[PROTO_VER_OFF];
-
-		// Should update?
-		if ((isValid == VALID_CODE) && ((protoVersion > version) || ((version > (0xff / 2)) && (protoVersion < 0xff / 2))) )
-		{
-			ledsLen = MIN(payload.length() - 2, BUFFER_SIZE);
-
-			memcpy(ledsData, data + 2, ledsLen);
-
-			version = protoVersion;
-		}
-	}
-
-	http.end();
-
-	// animate();
-
-done:
-	// delay(1000);
-
-	return;
-
-error:
-	resetGREENs();
-
-	goto done;
-}
-
 void loop()
 {
+	/* Anyway handle server */
+	server.handleClient();
+
 	if (mode == E_AP)
 	{
 		resetREDs();
-
-		server.handleClient();
 	}
 	else
 	{
-		socketIO.loop();
-
 		animate();
 	}
 }
